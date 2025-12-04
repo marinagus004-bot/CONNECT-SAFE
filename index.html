@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GPS Mula (1 Minuto)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .ping { animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite; }
+        @keyframes ping { 75%, 100% { transform: scale(2); opacity: 0; } }
+        #statusLog { font-family: monospace; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+
+    <div class="container mx-auto max-w-md p-4 min-h-screen flex flex-col">
+        
+        <div class="text-center mt-4 mb-6">
+            <h1 class="text-2xl font-bold text-blue-700">📍 GPS Mula (1 Min)</h1>
+            <p class="text-xs text-gray-500">Intervalo: 60 segundos</p>
+            <p id="connectionStatus" class="text-xs font-bold text-red-500 mt-1">Desconectado</p>
+        </div>
+
+        <div id="connectionPanel" class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
+            <h2 class="text-lg font-bold text-gray-800 mb-2">Elegir Pulsera</h2>
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-medium text-gray-700 uppercase tracking-wide">ID Dispositivo</label>
+                    <input type="text" id="deviceIdInput" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 text-2xl font-mono uppercase text-center py-2 border" placeholder="EJ: ARM-281">
+                </div>
+                <button id="connectBtn" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg transition-colors shadow-lg shadow-blue-500/30">
+                    CONECTAR
+                </button>
+            </div>
+        </div>
+
+        <div id="controlPanel" class="hidden flex-1 flex flex-col">
+            
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-4 text-center">
+                <p class="text-xs text-gray-400 uppercase">Transmitiendo a</p>
+                <h2 id="currentDeviceId" class="text-3xl font-mono font-bold text-gray-800 tracking-wider">---</h2>
+                <div class="flex justify-center items-center mt-2 space-x-2">
+                    <span id="liveIndicator" class="h-2 w-2 rounded-full bg-gray-300"></span>
+                    <span id="gpsStatus" class="text-xs font-medium text-gray-500">Inactivo</span>
+                </div>
+                <p id="nextUpdateTimer" class="text-xs text-blue-500 mt-2 font-mono h-4"></p>
+            </div>
+
+            <button id="toggleGpsBtn" class="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-400 font-bold rounded-2xl transition-all duration-300 flex flex-col items-center justify-center space-y-2 border-2 border-dashed border-gray-300 mb-6 py-10">
+                <svg id="gpsIcon" class="w-16 h-16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                <span id="btnText" class="text-xl">INICIAR (1 MIN)</span>
+            </button>
+
+            <button id="sosBtn" class="bg-white border-2 border-red-100 text-red-500 font-bold py-3 rounded-xl text-sm hover:bg-red-50 transition-colors mb-4">
+                FORZAR SOS
+            </button>
+
+            <div class="bg-gray-900 rounded-xl p-3 flex-1 overflow-hidden flex flex-col">
+                <div class="text-xs text-gray-400 mb-2 flex justify-between">
+                    <span>REGISTRO</span>
+                    <button id="clearLog" class="hover:text-white">BORRAR</button>
+                </div>
+                <div id="statusLog" class="text-green-400 text-xs font-mono overflow-y-auto h-32 space-y-1"></div>
+            </div>
+            
+            <button id="disconnectBtn" class="mt-4 text-xs text-gray-400 underline text-center">Desconectar</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, GeoPoint, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyCQ3pW-iY8OrC6G9s_LrT51oDKAVamJ_08",
+            authDomain: "connect-safe-649af.firebaseapp.com",
+            projectId: "connect-safe-649af",
+            storageBucket: "connect-safe-649af.appspot.com",
+            messagingSenderId: "1077342001621",
+            appId: "1:1077342001621:web:2b21496e17c9640224c55c"
+        };
+
+        // Variables Globales
+        let db, auth;
+        let deviceRef = null;
+        let watchId = null;
+        let intervalId = null; 
+        let isSending = false;
+        let isSOS = false;
+        let currentLat = null;
+        let currentLon = null;
+
+        // UI Elements
+        const logBox = document.getElementById('statusLog');
+        const connStatus = document.getElementById('connectionStatus');
+        const connPanel = document.getElementById('connectionPanel');
+        const ctrlPanel = document.getElementById('controlPanel');
+        const deviceInput = document.getElementById('deviceIdInput');
+        const currentIdLabel = document.getElementById('currentDeviceId');
+        const gpsBtn = document.getElementById('toggleGpsBtn');
+        const btnText = document.getElementById('btnText');
+        const gpsIcon = document.getElementById('gpsIcon');
+        const liveInd = document.getElementById('liveIndicator');
+        const gpsLabel = document.getElementById('gpsStatus');
+        const nextUpdateLabel = document.getElementById('nextUpdateTimer');
+
+        function log(msg, err = false) {
+            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+            const div = document.createElement('div');
+            div.innerHTML = `<span class="opacity-50">${time}</span> ${msg}`;
+            if(err) div.classList.add('text-red-400');
+            logBox.prepend(div);
+        }
+
+        // 1. INICIALIZAR
+        async function init() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                await signInAnonymously(auth);
+                connStatus.innerText = "ONLINE";
+                connStatus.className = "text-xs font-bold text-green-500 mt-1";
+                log("Firebase Conectado.");
+            } catch (e) {
+                connStatus.innerText = "ERROR";
+                log("Error Init: " + e.message, true);
+            }
+        }
+
+        // 2. CONECTAR
+        document.getElementById('connectBtn').addEventListener('click', async () => {
+            const id = deviceInput.value.trim().toUpperCase();
+            if (!id) return alert("Escribe un ID");
+            
+            log(`Buscando ${id}...`);
+            
+            try {
+                const docRef = doc(db, "devices", id);
+                const snap = await getDoc(docRef);
+
+                if (snap.exists()) {
+                    log("Dispositivo encontrado.");
+                    setupSession(docRef, id);
+                } else {
+                    log("ID nuevo. Creando registro...");
+                    await setDoc(docRef, {
+                        isSOSActive: false,
+                        lastKnownBatteryLevel: 1.0,
+                        lastKnownLocation: new GeoPoint(0, 0),
+                        lastSeen: serverTimestamp(),
+                        tutorUID: "",
+                        wearerFirstName: "", 
+                        wearerLastName: "" 
+                    });
+                    log("Registro limpio creado.");
+                    setupSession(docRef, id);
+                }
+            } catch (e) {
+                log("Error Conexión: " + e.message, true);
+            }
+        });
+
+        function setupSession(ref, id) {
+            deviceRef = ref;
+            connPanel.classList.add('hidden');
+            ctrlPanel.classList.remove('hidden');
+            currentIdLabel.innerText = id;
+            log("Listo.");
+        }
+
+        // 3. TOGGLE GPS (Lógica 1 Minuto)
+        gpsBtn.addEventListener('click', () => {
+            if (!isSending) {
+                // START
+                if (!navigator.geolocation) return alert("Sin soporte GPS");
+                isSending = true;
+                
+                // UI Changes
+                gpsBtn.className = "flex-1 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl transition-all duration-300 flex flex-col items-center justify-center space-y-2 border-none shadow-xl shadow-blue-500/40 mb-6 py-10";
+                btnText.innerText = "DETENER";
+                gpsIcon.classList.add('animate-bounce');
+                liveInd.className = "h-2 w-2 rounded-full bg-green-500 ping";
+                gpsLabel.innerText = "Esperando GPS...";
+                gpsLabel.className = "text-xs font-medium text-green-600";
+
+                // A. Mantener GPS actualizado en variables
+                watchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        currentLat = pos.coords.latitude;
+                        currentLon = pos.coords.longitude;
+                        const acc = Math.round(pos.coords.accuracy);
+                        gpsLabel.innerText = `GPS Listo (Precisión: ${acc}m)`;
+                    },
+                    (err) => log("GPS Error: " + err.message, true),
+                    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                );
+
+                // B. Primer envío y configurar intervalo
+                log("Iniciando ciclo de 1 min...");
+                
+                // Esperar 2 seg a que el GPS caliente y enviar
+                setTimeout(() => enviarUbicacionAServidor(), 2000);
+
+                // Configurar ciclo 60s
+                intervalId = setInterval(enviarUbicacionAServidor, 60000);
+
+            } else {
+                // STOP
+                isSending = false;
+                navigator.geolocation.clearWatch(watchId);
+                clearInterval(intervalId);
+                
+                // UI Reset
+                gpsBtn.className = "flex-1 bg-gray-100 hover:bg-gray-200 text-gray-400 font-bold rounded-2xl transition-all duration-300 flex flex-col items-center justify-center space-y-2 border-2 border-dashed border-gray-300 mb-6 py-10";
+                btnText.innerText = "INICIAR (1 MIN)";
+                gpsIcon.classList.remove('animate-bounce');
+                liveInd.className = "h-2 w-2 rounded-full bg-gray-300";
+                gpsLabel.innerText = "GPS Inactivo";
+                gpsLabel.className = "text-xs font-medium text-gray-500";
+                nextUpdateLabel.innerText = "";
+                
+                log("Transmisión detenida.");
+            }
+        });
+
+        // 4. FUNCIÓN CADA 1 MINUTO
+        async function enviarUbicacionAServidor() {
+            if (!deviceRef || currentLat === null) {
+                if(isSending) log("Aún sin coordenadas...");
+                return;
+            }
+
+            // Fecha legible
+            const ahora = new Date();
+            const fechaLegible = ahora.toLocaleString('es-MX', { hour12: false });
+
+            const dataToUpdate = {
+                lastKnownLocation: new GeoPoint(currentLat, currentLon),
+                lastSeen: serverTimestamp(),
+                fechaHora: fechaLegible // <--- NUEVO CAMPO
+            };
+
+            try {
+                await updateDoc(deviceRef, dataToUpdate);
+                log(`📤 ENVIADO: ${fechaLegible}`);
+                
+                // Cuenta regresiva visual
+                let secondsLeft = 60;
+                const timerDisplay = setInterval(() => {
+                    if(!isSending) { clearInterval(timerDisplay); return; }
+                    secondsLeft--;
+                    if(secondsLeft <= 0) clearInterval(timerDisplay);
+                    nextUpdateLabel.innerText = `Siguiente: ${secondsLeft}s`;
+                }, 1000);
+
+            } catch (e) {
+                log("Error subida: " + e.message, true);
+            }
+        }
+
+        // SOS MANUAL
+        document.getElementById('sosBtn').addEventListener('click', () => {
+            isSOS = !isSOS;
+            const ahora = new Date().toLocaleString();
+            updateDB({ isSOSActive: isSOS, fechaHora: ahora });
+            log(isSOS ? "⚠️ SOS ENVIADO" : "SOS Desactivado");
+        });
+
+        async function updateDB(data) {
+            if(!deviceRef) return;
+            try {
+                await updateDoc(deviceRef, { ...data, lastSeen: serverTimestamp() });
+            } catch (e) {
+                log("Error: " + e.message, true);
+            }
+        }
+
+        document.getElementById('disconnectBtn').addEventListener('click', () => location.reload());
+        document.getElementById('clearLog').addEventListener('click', () => logBox.innerHTML = '');
+
+        init();
+    </script>
+</body>
+</html>
