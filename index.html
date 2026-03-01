@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GPS Mula (1 Minuto)</title>
+    <title>GPS Mula (SOS Log)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { font-family: 'Inter', sans-serif; }
@@ -17,8 +17,8 @@
     <div class="container mx-auto max-w-md p-4 min-h-screen flex flex-col">
         
         <div class="text-center mt-4 mb-6">
-            <h1 class="text-2xl font-bold text-blue-700">📍 GPS Mula (1 Min)</h1>
-            <p class="text-xs text-gray-500">Intervalo: 60 segundos</p>
+            <h1 class="text-2xl font-bold text-blue-700">📍 GPS Mula + SOS Log</h1>
+            <p class="text-xs text-gray-500">Sistema de Emisión de Pruebas</p>
             <p id="connectionStatus" class="text-xs font-bold text-red-500 mt-1">Desconectado</p>
         </div>
 
@@ -71,7 +71,6 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // --- AQUÍ AGREGUÉ 'collection' y 'addDoc' ---
         import { getFirestore, doc, getDoc, setDoc, updateDoc, GeoPoint, serverTimestamp, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -187,7 +186,6 @@
                 gpsLabel.innerText = "Esperando GPS...";
                 gpsLabel.className = "text-xs font-medium text-green-600";
 
-                // A. Mantener GPS actualizado en variables
                 watchId = navigator.geolocation.watchPosition(
                     (pos) => {
                         currentLat = pos.coords.latitude;
@@ -199,13 +197,8 @@
                     { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
                 );
 
-                // B. Primer envío y configurar intervalo
                 log("Iniciando ciclo de 1 min...");
-                
-                // Esperar 2 seg a que el GPS caliente y enviar
                 setTimeout(() => enviarUbicacionAServidor(), 2000);
-
-                // Configurar ciclo 60s
                 intervalId = setInterval(enviarUbicacionAServidor, 60000);
 
             } else {
@@ -214,7 +207,6 @@
                 navigator.geolocation.clearWatch(watchId);
                 clearInterval(intervalId);
                 
-                // UI Reset
                 gpsBtn.className = "flex-1 bg-gray-100 hover:bg-gray-200 text-gray-400 font-bold rounded-2xl transition-all duration-300 flex flex-col items-center justify-center space-y-2 border-2 border-dashed border-gray-300 mb-6 py-10";
                 btnText.innerText = "INICIAR (1 MIN)";
                 gpsIcon.classList.remove('animate-bounce');
@@ -227,18 +219,15 @@
             }
         });
 
-        // 4. FUNCIÓN CADA 1 MINUTO (¡AQUÍ ESTÁ LA MAGIA!)
+        // 4. FUNCIÓN CADA 1 MINUTO
         async function enviarUbicacionAServidor() {
             if (!deviceRef || currentLat === null) {
                 if(isSending) log("Aún sin coordenadas...");
                 return;
             }
-
-            // Fecha legible
             const ahora = new Date();
             const fechaLegible = ahora.toLocaleString('es-MX', { hour12: false });
 
-            // PASO A: Actualizar ubicación actual (Esto ya lo tenías)
             const dataToUpdate = {
                 lastKnownLocation: new GeoPoint(currentLat, currentLon),
                 lastSeen: serverTimestamp(),
@@ -246,23 +235,19 @@
             };
 
             try {
-                // 1. Actualizar "En Vivo"
+                // A. Actualizar "En Vivo"
                 await updateDoc(deviceRef, dataToUpdate);
                 
-                // 2. --- GUARDAR EN HISTORIAL (NUEVO) ---
-                // Referencia a la sub-colección: devices/AUY-132/location_history
+                // B. Guardar en Historial de Ruta
                 const historyRef = collection(db, "devices", currentIdLabel.innerText, "location_history");
-                
                 await addDoc(historyRef, {
                     coordinate: new GeoPoint(currentLat, currentLon),
                     timestamp: serverTimestamp(),
-                    batteryLevel: 1.0 // Puedes simular batería si quieres
+                    batteryLevel: 1.0 
                 });
-                // ----------------------------------------
 
-                log(`📤 ENVIADO + HISTORIAL: ${fechaLegible}`);
+                log(`📤 ENVIADO: ${fechaLegible}`);
                 
-                // Cuenta regresiva visual
                 let secondsLeft = 60;
                 const timerDisplay = setInterval(() => {
                     if(!isSending) { clearInterval(timerDisplay); return; }
@@ -276,11 +261,31 @@
             }
         }
 
-        // SOS MANUAL
-        document.getElementById('sosBtn').addEventListener('click', () => {
+        // --- 5. SOS MANUAL Y REGISTRO ---
+        document.getElementById('sosBtn').addEventListener('click', async () => {
             isSOS = !isSOS;
-            const ahora = new Date().toLocaleString();
-            updateDB({ isSOSActive: isSOS, fechaHora: ahora });
+            const ahora = new Date();
+            const fechaLegible = ahora.toLocaleString('es-MX', { hour12: false });
+            
+            // 1. Encender/Apagar Luz Roja en App
+            updateDB({ isSOSActive: isSOS, fechaHora: fechaLegible });
+            
+            // 2. SI ES ACTIVACIÓN -> GUARDAR EVENTO PERMANENTE
+            if (isSOS) {
+                if(deviceRef && currentLat) {
+                    try {
+                        const sosRef = collection(db, "devices", currentIdLabel.innerText, "sos_events");
+                        await addDoc(sosRef, {
+                            coordinate: new GeoPoint(currentLat, currentLon),
+                            timestamp: serverTimestamp(),
+                            resolved: false
+                        });
+                        log("🚨 EVENTO SOS GUARDADO EN LOG");
+                    } catch (e) {
+                        log("Error guardando evento SOS: " + e.message, true);
+                    }
+                }
+            }
             log(isSOS ? "⚠️ SOS ENVIADO" : "SOS Desactivado");
         });
 
