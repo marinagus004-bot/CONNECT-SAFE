@@ -71,7 +71,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, updateDoc, GeoPoint, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // --- AQUÍ AGREGUÉ 'collection' y 'addDoc' ---
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, GeoPoint, serverTimestamp, collection, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyCQ3pW-iY8OrC6G9s_LrT51oDKAVamJ_08",
@@ -226,7 +227,7 @@
             }
         });
 
-        // 4. FUNCIÓN CADA 1 MINUTO
+        // 4. FUNCIÓN CADA 1 MINUTO (¡AQUÍ ESTÁ LA MAGIA!)
         async function enviarUbicacionAServidor() {
             if (!deviceRef || currentLat === null) {
                 if(isSending) log("Aún sin coordenadas...");
@@ -237,15 +238,29 @@
             const ahora = new Date();
             const fechaLegible = ahora.toLocaleString('es-MX', { hour12: false });
 
+            // PASO A: Actualizar ubicación actual (Esto ya lo tenías)
             const dataToUpdate = {
                 lastKnownLocation: new GeoPoint(currentLat, currentLon),
                 lastSeen: serverTimestamp(),
-                fechaHora: fechaLegible // <--- NUEVO CAMPO
+                fechaHora: fechaLegible
             };
 
             try {
+                // 1. Actualizar "En Vivo"
                 await updateDoc(deviceRef, dataToUpdate);
-                log(`📤 ENVIADO: ${fechaLegible}`);
+                
+                // 2. --- GUARDAR EN HISTORIAL (NUEVO) ---
+                // Referencia a la sub-colección: devices/AUY-132/location_history
+                const historyRef = collection(db, "devices", currentIdLabel.innerText, "location_history");
+                
+                await addDoc(historyRef, {
+                    coordinate: new GeoPoint(currentLat, currentLon),
+                    timestamp: serverTimestamp(),
+                    batteryLevel: 1.0 // Puedes simular batería si quieres
+                });
+                // ----------------------------------------
+
+                log(`📤 ENVIADO + HISTORIAL: ${fechaLegible}`);
                 
                 // Cuenta regresiva visual
                 let secondsLeft = 60;
